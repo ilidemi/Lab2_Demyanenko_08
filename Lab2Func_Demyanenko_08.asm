@@ -189,6 +189,13 @@ div4x32_sse PROC ; RCX - *quot
                  ; RDX - *a
                  ; R8  - *b
     
+    ; ”становить режим округлени€
+    sub esp, 4
+    stmxcsr [esp]
+    or dword ptr [esp], 110000000000000b
+    ldmxcsr [esp]
+    add esp, 4
+
     ; «агрузить все операнды в регистры xmm с преобразованием в double
     movdqa xmm4, [rdx]       ; «агрузить 128 бит разом
     cvtdq2pd xmm0, xmm4      ; ѕереместить первые два операнда с преобразованием в double
@@ -223,6 +230,13 @@ div4x32_sse ENDP
 mod4x32_sse PROC ; RCX - *rem
                  ; RDX - *a
                  ; R8  - *b
+    
+    ; ”становить режим округлени€
+    sub esp, 4
+    stmxcsr [esp]
+    or dword ptr [esp], 110000000000000b
+    ldmxcsr [esp]
+    add esp, 4
 
     ; —охранить xmm6 без использовани€ пам€ти
     pextrq r9, xmm6, 0
