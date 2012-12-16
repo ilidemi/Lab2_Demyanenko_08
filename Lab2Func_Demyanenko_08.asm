@@ -13,40 +13,16 @@
 
 .DATA
 ALIGN 16
-bitmaskmin    qword 0FFFFFFFF80000000h
-bitmaskmax    qword 000000007FFFFFFFh
-bitmask       qword 8000000080000000h
-antibitmask   qword 7FFFFFFF7FFFFFFFh
-bitmask32     dword 80000000h
-antibitmask32 dword 7FFFFFFFh
+bitmaskmin     oword 0FFFFFFFF80000000FFFFFFFF80000000h
+bitmaskmax     oword 000000007FFFFFFF000000007FFFFFFFh
+bitmasksse     oword 80000000800000008000000080000000h
+antibitmasksse oword 7FFFFFFF7FFFFFFF7FFFFFFF7FFFFFFFh
+bitmask        qword 8000000080000000h
+antibitmask    qword 7FFFFFFF7FFFFFFFh
+bitmask32      dword 80000000h
+antibitmask32  dword 7FFFFFFFh
 
 .CODE
-; ---------------------------------------------------------------------------- ;
-; Макропроцедура заполняет регистры xmm2, xmm3, xmm4 и xmm5 масками            ;
-; bitmaskmin, bitmaskmax, bitmask и antibitmask соответственно                 ;
-; ---------------------------------------------------------------------------- ;
-fillmasks_sse MACRO
-    ; Заполнить xmm2 минимальными 32битными числами
-    mov r9, bitmaskmin
-    pinsrq xmm2, r9, 0
-    pinsrq xmm2, r9, 1
-
-    ; Заполнить xmm3 максимальными 32битными числами
-    mov r9, bitmaskmax
-    pinsrq xmm3, r9, 0
-    pinsrq xmm3, r9, 1
-
-    ; Заполнить xmm4 32битной маской знака
-    mov r9, bitmask
-    pinsrq xmm4, r9, 0
-    pinsrq xmm4, r9, 1
-
-    ; Заполнить xmm5 32битной маской знака
-    mov r9, antibitmask
-    pinsrq xmm5, r9, 0
-    pinsrq xmm5, r9, 1    
-ENDM
-
 ; ---------------------------------------------------------------------------- ;
 ; Макропроцедура выполняет знаковое насыщение двойных слов, распакованных в    ;
 ; учетверённые и расположенных в a с использованием масок и b в качестве       ;
@@ -54,20 +30,20 @@ ENDM
 ; ---------------------------------------------------------------------------- ;
 saturate2x32_sse MACRO a, b
     ; Проверить результат на переполнение вниз и выполнить насыщение
-    movdqa xmm6, xmm2 ; Скопировать минимальное число
-    pcmpgtq xmm6, a   ; Сравнить с минимальным числом
-    movdqa b, xmm6    ; Обнулить переполненную часть
+    movdqa xmm4, bitmaskmin ; Скопировать минимальное число
+    pcmpgtq xmm4, a         ; Сравнить с минимальным числом
+    movdqa b, xmm4          ; Обнулить переполненную часть
     pandn b, a        
-    pand xmm6, xmm4   ; Выставить переполненную часть в минимум
-    por b, xmm6
+    pand xmm4, bitmasksse   ; Выставить переполненную часть в минимум
+    por b, xmm4
 
     ; Проверить результат на переполнение вверх и выполнить насыщение
-    movdqa xmm6, b     ; Скопировать результат
-    pcmpgtq xmm6, xmm3 ; Сравнить с максимальным числом
-    movdqa a, xmm6     ; Обнулить переполненную часть
+    movdqa xmm4, b            ; Скопировать результат
+    pcmpgtq xmm4, bitmaskmax  ; Сравнить с максимальным числом
+    movdqa a, xmm4            ; Обнулить переполненную часть
     pandn a, b         
-    pand xmm6, xmm5    ; Выставить переполненную часть в максимум
-    por a, xmm6
+    pand xmm4, antibitmasksse ; Выставить переполненную часть в максимум
+    por a, xmm4
 ENDM
 
 ; ---------------------------------------------------------------------------- ;
@@ -80,33 +56,48 @@ add4x32_sse PROC ; RCX - *sum
                  ; R8  - *b
 
     ; Загрузить все операнды в регистры xmm и расширить знаком до 64битных
-    movq xmm0, qword ptr [rdx]
-    pmovsxdq xmm0, xmm0
-    movq xmm1, qword ptr [r8]
-    pmovsxdq xmm1, xmm1
-    movq xmm8, qword ptr [rdx+8]
-    pmovsxdq xmm8, xmm8
-    movq xmm9, qword ptr [r8+8]
-    pmovsxdq xmm9, xmm9
-
+    movdqa xmm4, [rdx]       ; Загрузить 128 бит разом
+    pmovsxdq xmm0, xmm4      ; Переместить и расширить знаком первые два операнда
+    pshufd xmm4, xmm4, 1110b ; Переместить вторые два операнда на младшие позиции
+    pmovsxdq xmm2, xmm4      ; Переместить и расширить знаком вторые два операнда
+    movdqa xmm4, [r8]
+    pmovsxdq xmm1, xmm4
+    pshufd xmm4, xmm4, 1110b
+    pmovsxdq xmm3, xmm4
+    
     ; Выполнить сложение как учетверённых слов
     paddq xmm0, xmm1
-    paddq xmm8, xmm9
+    paddq xmm2, xmm3
 
-    ; Инициализировать маски
-    fillmasks_sse
+    
+    ; Проверить результат на переполнение вниз и выполнить насыщение
+    movdqa xmm4, bitmaskmin ; Скопировать минимальное число
+    pcmpgtq xmm4, xmm0         ; Сравнить с минимальным числом
+    movdqa xmm1, xmm4          ; Обнулить переполненную часть
+    pandn xmm1, xmm0        
+    pand xmm4, bitmasksse   ; Выставить переполненную часть в минимум
+    por xmm1, xmm4
+
+    ; Проверить результат на переполнение вверх и выполнить насыщение
+    movdqa xmm4, xmm1            ; Скопировать результат
+    pcmpgtq xmm4, bitmaskmax  ; Сравнить с максимальным числом
+    movdqa xmm0, xmm4            ; Обнулить переполненную часть
+    pandn xmm0, xmm1         
+    pand xmm4, antibitmasksse ; Выставить переполненную часть в максимум
+    por xmm0, xmm4
 
     ; Выполнить насыщение
     saturate2x32_sse xmm0, xmm1
-    saturate2x32_sse xmm8, xmm9
+    saturate2x32_sse xmm2, xmm3
 
-    ; Расположить результаты в младшей части регистров
-    pshufd xmm0, xmm0, 8
-    pshufd xmm8, xmm8, 8
+    ; Приготовить результаты к записи в память
+    pshufd xmm4, xmm0, 00001000b
+    pshufd xmm2, xmm2, 00001000b
+    pextrq rax, xmm2, 0
+    pinsrq xmm4, rax, 1
 
     ; Записать результат в память
-    movq qword ptr [rcx], xmm0
-    movq qword ptr [rcx+8], xmm8
+    movdqa [rcx], xmm4
 
     ret
 add4x32_sse ENDP
@@ -121,33 +112,31 @@ sub4x32_sse PROC ; RCX - *diff
                  ; R8  - *b
 
     ; Загрузить все операнды в регистры xmm и расширить знаком до 64битных
-    movq xmm0, qword ptr [rdx]
-    pmovsxdq xmm0, xmm0
-    movq xmm1, qword ptr [r8]
-    pmovsxdq xmm1, xmm1
-    movq xmm8, qword ptr [rdx+8]
-    pmovsxdq xmm8, xmm8
-    movq xmm9, qword ptr [r8+8]
-    pmovsxdq xmm9, xmm9
+    movdqa xmm4, [rdx]       ; Загрузить 128 бит разом
+    pmovsxdq xmm0, xmm4      ; Переместить и расширить знаком первые два операнда
+    pshufd xmm4, xmm4, 1110b ; Переместить вторые два операнда на младшие позиции
+    pmovsxdq xmm2, xmm4      ; Переместить и расширить знаком вторые два операнда
+    movdqa xmm4, [r8]
+    pmovsxdq xmm1, xmm4
+    pshufd xmm4, xmm4, 1110b
+    pmovsxdq xmm3, xmm4
 
     ; Выполнить вычитание как учетверённых слов
     psubq xmm0, xmm1
-    psubq xmm8, xmm9
-
-    ; Инициализировать маски
-    fillmasks_sse
+    psubq xmm2, xmm3
 
     ; Выполнить насыщение
     saturate2x32_sse xmm0, xmm1
-    saturate2x32_sse xmm8, xmm9
+    saturate2x32_sse xmm2, xmm3
 
-    ; Расположить результаты в младшей части регистров
-    pshufd xmm0, xmm0, 8
-    pshufd xmm8, xmm8, 8
+    ; Приготовить результаты к записи в память
+    pshufd xmm4, xmm0, 00001000b
+    pshufd xmm2, xmm2, 00001000b
+    pextrq rax, xmm2, 0
+    pinsrq xmm4, rax, 1
 
     ; Записать результат в память
-    movq qword ptr [rcx], xmm0
-    movq qword ptr [rcx+8], xmm8
+    movdqa [rcx], xmm4
 
     ret
 sub4x32_sse ENDP
@@ -162,33 +151,31 @@ mul4x32_sse PROC ; RCX - *prod
                  ; R8  - *b
 
     ; Загрузить все операнды в регистры xmm и расширить знаком до 64битных
-    movq xmm0, qword ptr [rdx]
-    pmovsxdq xmm0, xmm0
-    movq xmm1, qword ptr [r8]
-    pmovsxdq xmm1, xmm1
-    movq xmm8, qword ptr [rdx+8]
-    pmovsxdq xmm8, xmm8
-    movq xmm9, qword ptr [r8+8]
-    pmovsxdq xmm9, xmm9
+    movdqa xmm4, [rdx]       ; Загрузить 128 бит разом
+    pmovsxdq xmm0, xmm4      ; Переместить и расширить знаком первые два операнда
+    pshufd xmm4, xmm4, 1110b ; Переместить вторые два операнда на младшие позиции
+    pmovsxdq xmm2, xmm4      ; Переместить и расширить знаком вторые два операнда
+    movdqa xmm4, [r8]
+    pmovsxdq xmm1, xmm4
+    pshufd xmm4, xmm4, 1110b
+    pmovsxdq xmm3, xmm4
 
     ; Выполнить умножение
     pmuldq xmm0, xmm1
-    pmuldq xmm8, xmm9
-
-    ; Инициализировать маски
-    fillmasks_sse
+    pmuldq xmm2, xmm3
 
     ; Выполнить насыщение
     saturate2x32_sse xmm0, xmm1
-    saturate2x32_sse xmm8, xmm9
+    saturate2x32_sse xmm2, xmm3
 
-    ; Расположить результаты в младшей части регистров
-    pshufd xmm0, xmm0, 8
-    pshufd xmm8, xmm8, 8
+    ; Приготовить результаты к записи в память
+    pshufd xmm4, xmm0, 00001000b
+    pshufd xmm2, xmm2, 00001000b
+    pextrq rax, xmm2, 0
+    pinsrq xmm4, rax, 1
 
     ; Записать результат в память
-    movq qword ptr [rcx], xmm0
-    movq qword ptr [rcx+8], xmm8
+    movdqa [rcx], xmm4
 
     ret
 mul4x32_sse ENDP
@@ -201,24 +188,29 @@ mul4x32_sse ENDP
 div4x32_sse PROC ; RCX - *quot
                  ; RDX - *a
                  ; R8  - *b
-
+    
     ; Загрузить все операнды в регистры xmm с преобразованием в double
-    cvtpi2pd xmm0, qword ptr [rdx]
-    cvtpi2pd xmm1, qword ptr [r8]
-    cvtpi2pd xmm8, qword ptr [rdx+8]
-    cvtpi2pd xmm9, qword ptr [r8+8]
+    movdqa xmm4, [rdx]       ; Загрузить 128 бит разом
+    cvtdq2pd xmm0, xmm4      ; Переместить первые два операнда с преобразованием в double
+    pshufd xmm4, xmm4, 1110b ; Переставить вторые два операнда в младшие позиции
+    cvtdq2pd xmm2, xmm4      ; Переместить вторые два операнда с преобразованием в double
+    movdqa xmm4, [r8]        ; Загрузить 128 бит разом
+    cvtdq2pd xmm1, xmm4      ; Переместить первые два операнда с преобразованием в double
+    pshufd xmm4, xmm4, 1110b ; Переставить вторые два операнда в младшие позиции
+    cvtdq2pd xmm3, xmm4      ; Переместить вторые два операнда с преобразованием в double
 
     ; Выполнить деление
     divpd xmm0, xmm1
-    divpd xmm8, xmm9
+    divpd xmm2, xmm3
 
-    ; Преобразовать частное обратно в dword
-    cvtpd2dq xmm0, xmm0
-    cvtpd2dq xmm8, xmm8
+    ; Преобразовать частное обратно в dword и приготовить к записи в память
+    cvtpd2dq xmm4, xmm0
+    cvtpd2dq xmm2, xmm2
+    pextrq rax, xmm2, 0
+    pinsrq xmm4, rax, 1
 
     ; Записать результат в память
-    movq qword ptr [rcx], xmm0
-    movq qword ptr [rcx+8], xmm8
+    movdqa [rcx], xmm4
 
     ret
 div4x32_sse ENDP
@@ -232,44 +224,51 @@ mod4x32_sse PROC ; RCX - *rem
                  ; RDX - *a
                  ; R8  - *b
 
-    ; Загрузить все операнды в регистры xmm с преобразованием в double
-    cvtpi2pd xmm0, qword ptr [rdx]
-    mov r9, [r8]
-    movq mm0, r9
-    cvtpi2pd xmm1, mm0
-    cvtpi2pd xmm8, qword ptr [rdx+8]
-    mov r10, [r8+8]
-    movq mm0, r10
-    cvtpi2pd xmm9, mm0
+    ; Сохранить xmm6 без использования памяти
+    pextrq r9, xmm6, 0
+    pextrq r10, xmm6, 0
 
+    ; Загрузить все операнды из памяти, дублировать и преобразовать в double
+	movdqa xmm0, [rdx]       ; Загрузить 128 бит разом
+	movdqa xmm6, xmm0        ; Сохранить для последующего вычитания
+	cvtdq2pd xmm2, xmm0      ; Преобразовать в double
+	pshufd xmm0, xmm0, 1110b ; Переместить старшую часть в младшую
+	cvtdq2pd xmm3, xmm0      ; Преобразовать в double
+	movdqa xmm1, [r8]
+	movdqa xmm5, xmm1
+	cvtdq2pd xmm4, xmm1
+	pshufd xmm1, xmm1, 1110b
+	cvtdq2pd xmm0, xmm1
+	
     ; Выполнить деление
-    divpd xmm0, xmm1
-    divpd xmm8, xmm9
+	divpd xmm2, xmm4
+	divpd xmm3, xmm0
 
-    ; Преобразовать частное обратно в dword
-    cvtpd2dq xmm0, xmm0
-    cvtpd2dq xmm8, xmm8
-    
-    ; Расширить до qword
-    pmovsxdq xmm0, xmm0
-    pmovsxdq xmm8, xmm8
+    ; Преобразовать частные в dword и переместить в xmm0
+	cvttpd2dq xmm0, xmm3
+	pshufd xmm0, xmm0, 01000100b
+	cvttpd2dq xmm1, xmm2
+	pblendw xmm0, xmm1, 00001111b
 
-    ; Загрузить делители в регистры xmm 
-    pinsrd xmm1, r9d, 0
-    pinsrd xmm9, r10d, 0
-    shr r9, 32
-    shr r10, 32
-    pinsrd xmm1, r9d, 2
-    pinsrd xmm9, r10d, 2
-
-    
+    ; Домножить частное на делитель и вычесть из делимого
+	movdqa xmm2, xmm0
+	pmuldq xmm2, xmm5
+	pshufd xmm0, xmm0, 11110101b
+	pshufd xmm5, xmm5, 11110101b
+    pmuldq xmm0, xmm5
+	pshufd xmm0, xmm0, 10100000b
+	pblendw xmm2, xmm0, 11001100b
+	psubd xmm6, xmm2
 
     ; Записать результат в память
-    movq qword ptr [rcx], xmm0
-    movq qword ptr [rcx+8], xmm8
+	movdqa [rcx], xmm6
+
+    ; Восстановить xmm6
+    pinsrq xmm6, r9, 0
+    pinsrq xmm6, r10, 1
 
     ret
-rem4x32_sse ENDP
+mod4x32_sse ENDP
 
 ; ---------------------------------------------------------------------------- ;
 ; Макропроцедура вычисляет сумму двух пар знаковых 32-разрядных слагаемых      ;

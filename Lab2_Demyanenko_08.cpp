@@ -5,6 +5,7 @@
 #include <time.h>
 #include <iostream>
 #include <iomanip>
+#include <intrin.h>
 
 using std::ostream;
 using std::cout;
@@ -81,7 +82,7 @@ extern "C" void mul4x32_sse(__int32* prod,  __int32* a, __int32* b);
 extern "C" void div4x32_sse(__int32* quot,  __int32* a, __int32* b);
 extern "C" void mod4x32_sse(__int32* rem,   __int32* a, __int32* b);
 
-class int4x32_sse
+__declspec(align(16)) class int4x32_sse
 {
 public:
 	__int32 _val[4];
@@ -160,7 +161,7 @@ public:
 		_val[3] = 0;
 	}
 
-	int4x32_test(int4x32 (a))
+	int4x32_test(int4x32_sse (a))
 	{
 		_val[0] = a._val[0];
 		_val[1] = a._val[1];
@@ -181,7 +182,12 @@ public:
 		return int4x32(_val[0], _val[1], _val[2], _val[3]);
 	}
 
-	bool operator!=(int4x32& a)
+	operator int4x32_sse()
+	{
+		return int4x32_sse(_val[0], _val[1], _val[2], _val[3]);
+	}
+
+	bool operator!=(int4x32_sse& a)
 	{
         return ((_val[0] != a._val[0]) || (_val[1] != a._val[1]) || (_val[2] != a._val[2]) || (_val[3] != a._val[3]));
 	}
@@ -291,10 +297,10 @@ int _tmain(int argc, _TCHAR* argv[])
 {
 	int4x32_test a_test, b_test, c_test;
 	int4x32 a, b, c;
-
-    int4x32_sse x(1000000000, -2000000000, 300000000, -500000000);
-    int4x32_sse y(5, 6, -7, -8);
-    int4x32_sse z(x / y);
+    int4x32_sse a_sse, b_sse, c_sse;
+    __int64 asm_add = 0, asm_sub = 0, asm_mul = 0, asm_div = 0, asm_mod = 0,
+            sse_add = 0, sse_sub = 0, sse_mul = 0, sse_div = 0, sse_mod = 0;
+    __int64 start, end;
 
 	srand((unsigned) time(NULL));
 
@@ -305,14 +311,40 @@ int _tmain(int argc, _TCHAR* argv[])
         case 0:
             a = a_test.rand();
             b = b_test.rand();
+
+            start = __rdtsc();
             c = a + b;
+            end = __rdtsc();
+            asm_add += (end - start);
+
+            a_sse = a_test.rand();
+            b_sse = b_test.rand();
+            
+            start = __rdtsc();
+            c_sse = a_sse + b_sse;
+            end = __rdtsc();
+            sse_add += (end - start);
+
             c_test = a_test + b_test;
             break;
 
         case 1:
             a = a_test.rand();
             b = b_test.rand();
+            
+            start = __rdtsc();
             c = a - b;
+            end = __rdtsc();
+            asm_sub += (end - start);
+
+            a_sse = a_test.rand();
+            b_sse = b_test.rand();
+            
+            start = __rdtsc();
+            c_sse = a_sse - b_sse;
+            end = __rdtsc();
+            sse_sub += (end - start);
+
             c_test = a_test - b_test;
             break;
 
@@ -320,7 +352,20 @@ int _tmain(int argc, _TCHAR* argv[])
             // Уменьшаем множители, чтобы произведение не всегда переполнялось
             a = a_test.rand(17);
             b = b_test.rand(17);
+            
+            start = __rdtsc();
             c = a * b;
+            end = __rdtsc();
+            asm_mul += (end - start);
+            
+            a_sse = a_test.rand(17);
+            b_sse = b_test.rand(17);
+            
+            start = __rdtsc();
+            c_sse = a_sse * b_sse;
+            end = __rdtsc();
+            sse_mul += (end - start);
+
             c_test = a_test * b_test;
             break;
 
@@ -331,8 +376,24 @@ int _tmain(int argc, _TCHAR* argv[])
                 b = b_test.rand(16);
             }
             while (b_test.hasZeros()); // Исключение деления на ноль
-
+                        
+            start = __rdtsc();
             c = a / b;
+            end = __rdtsc();
+            asm_div += (end - start);
+                        
+            a_sse = a_test.rand();
+            do
+            {
+                b_sse = b_test.rand(16);
+            }
+            while (b_test.hasZeros()); // Исключение деления на ноль
+                        
+            start = __rdtsc();
+            c_sse = a_sse / b_sse;
+            end = __rdtsc();
+            sse_div += (end - start);
+
             c_test = a_test / b_test;
             break;
 
@@ -343,20 +404,36 @@ int _tmain(int argc, _TCHAR* argv[])
                 b = b_test.rand(16);
             }
             while (b_test.hasZeros()); // Исключение взятия по модулю ноль
-
+                        
+            start = __rdtsc();
             c = a % b;
+            end = __rdtsc();
+            asm_mod += (end - start);
+                        
+            a_sse = a_test.rand();
+            do
+            {
+                b_sse = b_test.rand(16);
+            }
+            while (b_test.hasZeros()); // Исключение деления на ноль
+                        
+            start = __rdtsc();
+            c_sse = a_sse % b_sse;
+            end = __rdtsc();
+            sse_mod += (end - start);
+
             c_test = a_test % b_test;
             break;
         }
         
-		if (c_test != c)
+		if (c_test != c_sse)
 		{
 			cout << endl << endl << "*** ERROR in test " << testNo << " ***" << endl << endl;
-			cout << "a      = " << (int4x32_test) a << endl;
+			cout << "a_sse  = " << (int4x32_test) a_sse << endl;
 			cout << "a_test = " << a_test << endl << endl;
-			cout << "b      = " << (int4x32_test) b << endl;
+			cout << "b_sse  = " << (int4x32_test) b_sse << endl;
 			cout << "b_test = " << b_test << endl << endl;
-			cout << "c      = " << (int4x32_test) c << endl;
+			cout << "c_sse  = " << (int4x32_test) c_sse << endl;
 			cout << "c_test = " << c_test << endl << endl;
 
 			_getch();
@@ -370,6 +447,26 @@ int _tmain(int argc, _TCHAR* argv[])
 	}
 
 	cout << setw(8) << TESTS_COUNT;
+
+    cout << endl;
+    cout << "Addition time (ASM): " << asm_add << endl;
+    cout << "Addition time (SSE): " << sse_add << endl;
+
+    cout << endl;
+    cout << "Subtraction time (ASM): " << asm_sub << endl;
+    cout << "Subtraction time (SSE): " << sse_sub << endl;
+
+    cout << endl;
+    cout << "Multiplication time (ASM): " << asm_mul << endl;
+    cout << "Multiplication time (SSE): " << sse_mul << endl;
+
+    cout << endl;
+    cout << "Division time (ASM): " << asm_div << endl;
+    cout << "Division time (SSE): " << sse_div << endl;
+
+    cout << endl;
+    cout << "Module calculation time (ASM): " << asm_mod << endl;
+    cout << "Module calculation time (SSE): " << sse_mod << endl;
 
 	cout << endl << "Press any key to exit...";
 	_getch();
